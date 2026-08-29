@@ -25,6 +25,14 @@ The `.exe` is built by GitHub Actions (this sandbox is Linux, so the binary is p
    archive preview, that gives you a read-only temp folder.
 3. Double-click `desktop-slideshow.exe`.
 
+> ⚠️ **One manual step the first time.** GitHub refuses any push from a GitHub-App/bot token that
+> creates files under `.github/workflows`, so the CI definition ships as
+> [`build/build-windows.yml`](build/build-windows.yml) and *you* have to commit it once:
+>
+> * **web (30 s):** repo → *Add file* → *Create new file* → name it
+>   `.github/workflows/build-windows.yml` → paste the contents of `build/build-windows.yml` → commit to `main`; **or**
+> * **CLI:** `powershell -ExecutionPolicy Bypass -File build\enable-actions.ps1` (needs `gh auth login` as *you*).
+
 ### Build it yourself / rebuild
 
 | What | How |
