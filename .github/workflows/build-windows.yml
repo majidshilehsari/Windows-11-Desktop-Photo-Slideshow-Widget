@@ -67,7 +67,6 @@ jobs:
           set -o pipefail
           export PATH=/mingw64/bin:$PATH
           gcc --version | head -1
-          export DSKV_VERSION="${{ steps.ver.outputs.version }}"
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build/build.ps1
           ls -l dist
 
