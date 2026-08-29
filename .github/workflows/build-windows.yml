@@ -67,10 +67,8 @@ jobs:
           set -o pipefail
           export PATH=/mingw64/bin:$PATH
           gcc --version | head -1
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build/build.ps1 \
-            -Version "${{ steps.ver.outputs.version }}" \
-            -OutDir dist \
-            -JobName desktop-slideshow
+          export DSKV_VERSION="${{ steps.ver.outputs.version }}"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build/build.ps1
           ls -l dist
 
       - name: Upload artefacts
@@ -98,6 +96,6 @@ jobs:
             First run: right-click the tray icon -> **Choose folder**, drag the picture into place
             (Edit mode / `Ctrl+Alt+W`), then tick **Start with Windows**.
           files: |
-            dist/desktop-slideshow-${{ steps.ver.outputs.version }}-win-x64-portable.zip
+            dist/*-win-x64-portable.zip
             dist/desktop-slideshow.exe
             dist/*SHA256.txt
