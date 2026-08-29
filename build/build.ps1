@@ -1,19 +1,14 @@
-این بار گناهکار build.ps1 بود، نه کامپایل. دقیقاً این خط را نوشته بودم:
-
-($_ -replace '\','/')      # ← '\' در PowerShell یک ریگولار اکسپرشن است و نامعتبر
-ویندوز به‌درستی می‌گوید The regular expression pattern \ is not valid. جای Replace متن ساده، -replace (ریگولار) را گذاشته بودم. سه اصلاح انجام شد:
-
--replace '\' → تابع Fwd با .Replace('\','/') (جایگزینی متنی، بدون ریگولار).
--lshcore و -lwindowscodecs از لینک حذف شد؛ GetDpiForMonitor حالا در رانتایم از SHCORE.dll با LoadLibraryEx گرفته می‌شود و fallback به GetDeviceCaps دارد → دیگر به بودن/نبودن import library در SDK بستگی ندارد (کد src/app.cpp هم همین را پیاده می‌کند).
-response-file با مسیر نسبی dist/build.rsp به g++ داده می‌شود و توکن‌های -D بدون کوتیشن نوشته می‌شوند (قبلاً -DDSKV_VERSION_STR=L"..." داخل کوتیشن خراب می‌شد).
-کاری که می‌کنی
-workflow را دست نزن (همان install: mingw-w64-x86_64-toolchain که فرستادی درست است). فقط build/build.ps1 را کامل عوض کن:
-
-https://github.com/majidshilehsari/Windows-11-Desktop-Photo-Slideshow-Widget/edit/main/build/build.ps1 → همه را پاک کن → این را paste کن → Commit → Actions → Build Windows exe → Run workflow.
-
 <#
   build.ps1 - builds desktop-slideshow.exe with a MinGW-w64 toolchain (g++).
-  Used both by GitHub Actions and locally (build\build.cmd).
+
+  On your own Windows box, from an "MSYS2 MinGW64" shell (or just run build\build.cmd):
+      powershell -ExecutionPolicy Bypass -File build\build.ps1
+  It is also exactly what the GitHub Actions workflow runs, so both paths agree.
+
+  IMPORTANT: keep this file pure ASCII and English-only.  Windows PowerShell 5.1
+  reads a BOM-less .ps1 as ANSI, so UTF-8 comments in any other language arrive at
+  the parser as mojibake and produce nonsense errors such as "Missing closing ')'".
+  Non-ASCII text belongs in the .cpp sources (gcc reads UTF-8), never in the scripts.
 #>
 [CmdletBinding()]
 param(
@@ -29,16 +24,14 @@ Set-Location $root
 
 function Invoke-Step {
     param([string]$File, [string[]]$Arguments)
-    Write-Host "== $File $($Arguments -join ' ')" -ForegroundColor Cyan
+    Write-Host "== $File $($Arguments -join ' ')"
     & $File @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$File failed with exit code $LASTEXITCODE" }
 }
 
-function Fwd([string]$p) { return $p.Replace('\', '/') }   # literal, not regex
-
 foreach ($tool in @('g++', 'windres')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-        throw "$tool not found. Use an MSYS2 MinGW64 shell, or run build\build.cmd."
+        throw "$tool not found. Use an MSYS2 MinGW64 shell, or run build\build.cmd (it installs gcc/binutils/crt via pacman)."
     }
 }
 & g++ --version | Select-Object -First 1
@@ -54,16 +47,21 @@ $parts = (@($Version -split '\.') + @('0','0','0','0'))[0..3]
 $rcSrc = Get-Content -Raw 'src/app.rc'
 $rcSrc = $rcSrc.Replace('0,1,0,0', ($parts -join ','))
 $rcSrc = $rcSrc.Replace('"0.1.0.0"', '"' + ($parts -join '.') + '"')
+# windres resolves "app.ico"/"app.manifest" relative to the .rc file, so keep it inside src/
 $rcGen = Join-Path (Join-Path $root 'src') 'app-generated.rc'
 Set-Content -Path $rcGen -Value $rcSrc -Encoding ASCII
 
 $res = Join-Path $out 'app.res'
-Invoke-Step 'windres' @('-i', (Fwd $rcGen), '-O', 'coff', '-o', (Fwd $res))
+Invoke-Step 'windres' @('-i', (Join-Path $root 'src\app-generated.rc'), '-O', 'coff',
+                        '-o', (Join-Path $out 'app.res'))
 Remove-Item $rcGen -Force
 
 $exe = Join-Path $out "$JobName.exe"
 
-# ---- compile + link through a response file (no quoting hazards) ----
+# ---- compile + link ----
+# The version macro holds embedded double quotes, so g++ gets a real argument array
+# (PowerShell does no shell parsing for native commands); dist/build.rsp is written
+# as well, only so that a failing CI log can be compared against the exact flags.
 $defines = @('-DUNICODE','-D_UNICODE','-DDSKV_VERSION_STR=L"' + ($parts -join '.') + '"')
 $cxxFlags = @('-std=c++17','-O2','-s','-Wall','-Wextra','-Wno-unused-parameter',
               '-municode','-mwindows','-Wl,--subsystem,windows')
@@ -72,30 +70,27 @@ $libs = @('-lgdiplus','-lcomctl32','-lshell32','-lwtsapi32',
           '-luser32','-lgdi32','-lole32','-loleaut32','-luuid','-lkernel32','-ladvapi32')
 if ($ExtraFlags) { $cxxFlags += (@($ExtraFlags -split '\s+') | Where-Object { $_ }) }
 
-function Write-Rsp([string]$path, [string[]]$lines) {
-    $lines | ForEach-Object {
-        $t = Fwd $_
-        if ($t.StartsWith('-D')) { $t } else { '"' + $t + '"' }
-    } | Set-Content -Encoding ascii -Path $path
-}
+function Fwd([string]$p) { return $p.Replace('\', '/') }   # literal replace; -replace would compile a regex
+$($cxxFlags + $linkFlags + $defines + $srcFiles + @($res, '-o', $exe) + $libs) |
+    ForEach-Object { if ($_.StartsWith('-D')) { $_ } else { '"' + (Fwd $_) + '"' } } |
+    Set-Content -Encoding ascii -Path (Join-Path $out 'build.rsp')
 
-$rspRel = (Fwd (Join-Path $OutDir 'build.rsp'))
-$rsp = Join-Path $out 'build.rsp'
-Write-Rsp $rsp ($cxxFlags + $linkFlags + $defines + $srcFiles + @($res, '-o', $exe) + $libs)
+$gppArgs = $cxxFlags + $linkFlags + $defines + $srcFiles + @($res, '-o', $exe) + $libs
 
 $shippedRuntime = $false
 try {
-    Invoke-Step 'g++' @('@' + $rspRel)
+    Invoke-Step 'g++' $gppArgs
 } catch {
-    # no static libwinpthread/libstdc++ in this MinGW? link dynamically and ship the DLLs
-    Write-Host "static link failed - retrying with a dynamic runtime" -ForegroundColor Yellow
-    Write-Rsp $rsp ($cxxFlags + $defines + $srcFiles + @($res, '-o', $exe) + $libs)
-    Invoke-Step 'g++' @('@' + $rspRel)
+    # Some MinGW-w64 builds ship no static libwinpthread.a / libstdc++.a.  Rather
+    # than failing, link against the DLL runtime and ship those DLLs next to the exe.
+    Write-Host "static link failed - retrying with a dynamic runtime"
+    Invoke-Step 'g++' ($cxxFlags + $defines + $srcFiles + @($res, '-o', $exe) + $libs)
     $shippedRuntime = $true
 }
 
+# ---- optional: pack it even smaller (may upset SmartScreen / AV) ----
 if (Get-Command upx -ErrorAction SilentlyContinue) {
-    Write-Host '== upx' -ForegroundColor Cyan
+    Write-Host '== upx'
     & upx -9 --best $exe | Out-Null
 }
 
@@ -120,5 +115,5 @@ Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Compression
     Set-Content -Encoding ascii (Join-Path $out "$JobName-$($parts -join '.')-SHA256.txt")
 
 Write-Host ''
-Write-Host ('built {0} ({1:N0} bytes)' -f (Split-Path $exe -Leaf), (Get-Item $exe).Length) -ForegroundColor Green
-Write-Host ('built {0}' -f $zip) -ForegroundColor Green
+Write-Host ('built {0} ({1:N0} bytes)' -f (Split-Path $exe -Leaf), (Get-Item $exe).Length)
+Write-Host ('built {0}' -f $zip)
