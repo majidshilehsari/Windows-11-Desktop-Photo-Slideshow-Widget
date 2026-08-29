@@ -1,13 +1,20 @@
-// app.rc - icon, version info and the application manifest (DPI + Win11 compat)
+// Version info.  build.sh replaces the @VERCOMMA@ / @VERDOT@ placeholders below -
+// that keeps every version-related quote inside this file, where a shell cannot
+// reach it.  The fallbacks below are used when someone runs windres by hand.
 #include <windows.h>
+
+#define VER_FILEVERSION             @VERCOMMA@
+#define VER_FILEVERSION_STR         "@VERDOT@"
+#define VER_PRODUCTVERSION          @VERCOMMA@
+#define VER_PRODUCTVERSION_STR      "@VERDOT@"
 
 1 24 "app.manifest"
 
 IDI_ICON1 ICON "app.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION    0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION    VER_FILEVERSION
+ PRODUCTVERSION VER_PRODUCTVERSION
  FILEFLAGSMASK  0x3fL
  FILEFLAGS      0x0L
  FILEOS         VOS_NT_WINDOWS32
@@ -20,12 +27,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "majidshilehsari"
             VALUE "FileDescription",  "Desktop Photo Slideshow widget"
-            VALUE "FileVersion",        "0.1.0.0"
+            VALUE "FileVersion",       VER_FILEVERSION_STR
             VALUE "InternalName",     "desktop-slideshow"
             VALUE "LegalCopyright",   "MIT License"
             VALUE "OriginalFilename", "desktop-slideshow.exe"
             VALUE "ProductName",      "Desktop Photo Slideshow"
-            VALUE "ProductVersion",   "0.1.0.0"
+            VALUE "ProductVersion",    VER_PRODUCTVERSION_STR
         END
     END
     BLOCK "VarFileInfo"
