@@ -118,7 +118,7 @@ width = 0
 height = 0           ; written for you when you move the widget
 
 caption = 1
-caption_fmt = {name}  ·  {i}/{n}    ; {name} {folder} {path} {i} {n} {time} {date}
+caption_fmt = {name}  ·  {i} of {n}    ; {name} {folder} {path} {i} {n} {time} {date}
 caption_size = 15
 caption_font = Segoe UI
 caption_h = 40

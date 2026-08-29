@@ -27,7 +27,7 @@ std::wstring TrimWs(std::wstring s)
     return s;
 }
 
-std::wstring Unquote(std::wstring s)
+std::wstring Unquote(std::wstring s, bool slashesToBackslashes = false)
 {
     s = TrimWs(std::move(s));
     if (s.size() >= 2) {
@@ -36,8 +36,10 @@ std::wstring Unquote(std::wstring s)
             s = s.substr(1, s.size() - 2);
         }
     }
-    for (auto& ch : s)
-        if (ch == L'/') ch = L'\\';
+    // only folder paths get normalised - never free text such as caption_fmt
+    if (slashesToBackslashes)
+        for (auto& ch : s)
+            if (ch == L'/') ch = L'\\';
     return s;
 }
 
@@ -99,7 +101,7 @@ struct IniFile {
         return false;
     }
 
-    std::wstring Get(const std::wstring& key, const std::wstring& def = L"") const
+    std::wstring Get(const std::wstring& key, const std::wstring& def = L"", bool pathLike = false) const
     {
         for (auto& l : lines) {
             std::wstring t = TrimWs(l);
@@ -115,7 +117,7 @@ struct IniFile {
                     if (v[i] == L';' && (v[i - 1] == L' ' || v[i - 1] == L'\t')) { c = i; break; }
                 }
                 if (c != std::wstring::npos) v = v.substr(0, c);
-                return Unquote(TrimWs(v));
+                return Unquote(TrimWs(v), pathLike);
             }
         }
         return def;
@@ -324,7 +326,7 @@ bool LoadConfig(Ctx& c)
 
     auto has = [&](const wchar_t* key) { return f.HasKey(key); };
 
-    std::wstring p = f.Get(L"path");
+    std::wstring p = f.Get(L"path", L"", true);
     if (!p.empty()) k.path = p;
     if (k.path.empty()) k.path = GetKnownPictures();
     k.recursive        = f.GetB(L"recursive", k.recursive);
