@@ -1,187 +1,132 @@
-// dskv_pch.h - shared includes / global declarations for
-// "Desktop Photo Slideshow" - a tiny, portable Windows 11 desktop widget.
-#pragma once
+<#
+  build.ps1 - builds desktop-slideshow.exe with a MinGW-w64 toolchain (g++).
 
-#ifndef WINVER
-#define WINVER 0x0A00
-#endif
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0A00
-#endif
-#ifndef _WIN32_IE
-#define _WIN32_IE 0x0A00
-#endif
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+  On your own Windows box, from an "MSYS2 MinGW64" shell (or just run build\build.cmd):
+      powershell -ExecutionPolicy Bypass -File build\build.ps1
+  It is also exactly what the GitHub Actions workflow runs, so both paths agree.
 
-#include <windows.h>
-#include <windowsx.h>
-#include <shellapi.h>
-#include <shobjidl.h>
-#include <shlobj.h>
-#include <commctrl.h>
-#include <wtsapi32.h>
-#include <shcore.h>
-#include <shellscalingapi.h>   // GetDpiForMonitor (mingw-w64 declares it here)
-#include <dbt.h>
+  IMPORTANT: keep this file pure ASCII and English-only.  Windows PowerShell 5.1
+  reads a BOM-less .ps1 as ANSI, so UTF-8 comments in any other language arrive at
+  the parser as mojibake and produce nonsense errors such as "Missing closing ')'".
+  Non-ASCII text belongs in the .cpp sources (gcc reads UTF-8), never in the scripts.
 
-// a couple of SDK revisions ship the header without the enum
-#ifndef MDT_EFFECTIVE_DPI
-#define MDT_EFFECTIVE_DPI 0
-#endif
+  Also: never pass a quoted -D macro on the command line.  From an MSYS2 bash step
+  the argument goes through bash -> PowerShell -> g++, and every layer re-quotes, so
+  -DSOMETHING=L"1.2.3" arrives as -DSOMETHING=L" 1.2.3 " (see CI run #7).  The
+  version is passed as a bare -DDSKV_VERSION=1.2.3.4 and stringified in dskv_pch.h.
+#>
+[CmdletBinding()]
+param(
+    [string]$Version    = '0.1.0',
+    [string]$OutDir     = 'dist',
+    [string]$JobName    = 'desktop-slideshow',
+    [string]$ExtraFlags = ''
+)
 
-#include <gdiplus.h>
+$ErrorActionPreference = 'Stop'
+# CI passes the version through an environment variable on purpose: a -Version "x"
+# argument survives bash -> PowerShell quoting badly.  A -Version switch still wins.
+if (-not $PSBoundParameters.ContainsKey('Version') -and $env:DSKV_VERSION) { $Version = $env:DSKV_VERSION }
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+Set-Location $root
 
-#include <string>
-#include <cwchar>
-#include <vector>
-#include <algorithm>
-#include <filesystem>
+function Invoke-Step {
+    param([string]$File, [string[]]$Arguments)
+    Write-Host "== $File $($Arguments -join ' ')"
+    & $File @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "$File failed with exit code $LASTEXITCODE" }
+}
 
-#pragma comment(lib, "gdiplus.lib")
+$gpp = (Get-Command g++ -ErrorAction SilentlyContinue).Source
+if (-not $gpp) { $gpp = (Get-Command gcc -ErrorAction SilentlyContinue).Source }
+if (-not $gpp) { throw "g++ not found. Use an MSYS2 MinGW64 shell, or run build\build.cmd (it installs gcc/binutils/crt via pacman)." }
+if (-not (Get-Command windres -ErrorAction SilentlyContinue)) { throw "windres not found. Install mingw-w64-x86_64-binutils." }
+& $gpp --version | Select-Object -First 1
 
-// ---------- custom window messages ----------
-#define WM_APP_TRAY        (WM_APP + 1)
-#define WM_APP_REMOTEQUIT  (WM_APP + 2)
-#define WM_APP_MENU        (WM_APP + 3)
-#define WM_APP_RELOAD      (WM_APP + 4)
-#define WM_APP_SAVE        (WM_APP + 5)
+$srcFiles = @('main.cpp','app.cpp','config.cpp','images.cpp','render.cpp','cli.cpp') |
+            ForEach-Object { "src/$_" }
 
-#define DSKV_CLASS_NAME    L"DskvSlideshowWidgetWnd"
-#define DSKV_HIDDEN_CLASS  L"DskvSlideshowHiddenWnd"
-#define DSKV_MUTEX_NAME    L"Local\\DskvDesktopSlideshow.SingleInstance"
-#define DSKV_APP_NAME      L"Desktop Photo Slideshow"
-#define DSKV_INI_CANDIDATES 2
+$out = Join-Path $root $OutDir
+New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-// ---------- tunables ----------
-#ifndef DSKV_VERSION_STR
-#define DSKV_VERSION_STR L"0.1.0"
-#endif
-#define DSKV_TIMER_STEP     1001
-#define DSKV_TIMER_ANIM     1002
-#define DSKV_TIMER_BOTTOM   1003
-#define DSKV_TIMER_RETRY    1004
+# ---- version info: patch the .rc, then compile it (with the manifest) to .res ----
+$parts = (@($Version -split '\.') + @('0','0','0','0'))[0..3]
+$verStr = $parts -join '.'
+$rcSrc = Get-Content -Raw 'src/app.rc'
+$rcSrc = $rcSrc.Replace('0,1,0,0', ($parts -join ','))
+$rcSrc = $rcSrc.Replace('"0.1.0.0"', '"' + $verStr + '"')
+# windres resolves "app.ico"/"app.manifest" relative to the .rc file, so keep it inside src/
+Set-Content -Path 'src/app-generated.rc' -Value $rcSrc -Encoding ASCII
 
-#define DSKV_IDC_BASE       1000
-#define DSKV_ID_OK          1
-#define DSKV_ID_CANCEL      2
-#define DSKV_ID_APPLY       3
+# all paths handed to the tools are repo-relative: nothing to quote, nothing for
+# an MSYS <-> Windows path converter to rewrite
+Invoke-Step 'windres' @('-i', 'src/app-generated.rc', '-O', 'coff', '-o', 'dist/app.res')
+Remove-Item 'src/app-generated.rc' -Force
 
-namespace dskv {
+$exe = Join-Path $out "$JobName.exe"
 
-struct Config;
+# ---- compile + link ----
+$cxxFlags  = @('-std=c++17','-O2','-s','-Wall','-Wextra','-Wno-unused-parameter',
+               '-municode','-mwindows','-Wl,--subsystem,windows')
+$defines   = @('-DUNICODE','-D_UNICODE','-DDSKV_VERSION=' + $verStr)
+$linkStatic = @('-static','-static-libgcc','-static-libstdc++')
+$libs      = @('-lgdiplus','-lcomctl32','-lshell32','-lwtsapi32',
+               '-luser32','-lgdi32','-lole32','-loleaut32','-luuid','-lkernel32','-ladvapi32')
+if ($ExtraFlags) { $cxxFlags += (@($ExtraFlags -split '\s+') | Where-Object { $_ }) }
 
-struct ScaledImage {
-    std::wstring        path;
-    std::wstring        sig;               // layout signature the cached bitmap was built for
-    SIZE                srcSize{0, 0};     // decoded (already EXIF-rotated) size
-    SIZE                boxSize{0, 0};     // size of `bmp` in pixels
-    Gdiplus::Bitmap*    bmp = nullptr;     // pre-scaled, deleted by owner
-    bool                coverFill = true;  // true: crop-to-fill, false: fit-inside
-    double              baseScale = 1.0;   // scale that exactly covers `boxSize`
-};
+# dist/build.rsp mirrors the argument list (all bare tokens, no quoting needed); if a
+# build ever fails, this file shows the exact command line that was intended.
+function Fwd([string]$p) { return $p.Replace('\', '/') }
+$staticArgs = $cxxFlags + $defines + $linkStatic + $srcFiles + @('dist/app.res', '-o', (Fwd $exe)) + $libs
+$dynamicArgs = $cxxFlags + $defines + $srcFiles + @('dist/app.res', '-o', (Fwd $exe)) + $libs
+($staticArgs -join "`n") | Set-Content -Encoding ascii -Path (Join-Path $out 'build.rsp')
 
-struct Ctx {
-    HWND      hidden  = nullptr;   // message-only window: timers, tray, dialogs
-    HWND      widget  = nullptr;   // the layered widget window itself
-    HICON     icon    = nullptr;
-    HINSTANCE inst    = nullptr;
-    Config*   cfg     = nullptr;
+$shippedRuntime = $false
+try {
+    Invoke-Step $gpp $staticArgs
+} catch {
+    # If this MinGW has no static runtime libs, link against the DLL runtime and ship
+    # those few DLLs next to the exe instead.
+    Write-Host "static link failed - retrying with a dynamic runtime"
+    Invoke-Step $gpp $dynamicArgs
+    $shippedRuntime = $true
+}
 
-    std::vector<std::wstring> list;      // playlist of image files
-    size_t      index     = 0;           // index inside `list`
-    bool        playing   = true;
+# ---- optional: pack it even smaller (may upset SmartScreen / AV) ----
+if (Get-Command upx -ErrorAction SilentlyContinue) {
+    Write-Host '== upx'
+    & upx -9 --best $exe | Out-Null
+}
 
-    // transition / animation state
-    unsigned long long stepStartMs = 0;  // GetTickCount64() of the current slide
-    unsigned long long transStartMs = 0; // GetTickCount64() of the crossfade
-    unsigned    transMs   = 0;           // remaining crossfade length (0 = none)
-    unsigned    stepMs    = 0;           // resolved length of the current slide
-    bool        zoomOut   = false;       // direction of the current zoom step
-    // pending values for the *incoming* slide (applied when the crossfade ends,
-    // so the outgoing picture can finish its Ken-Burns move on screen)
-    bool        havePend  = false;
-    unsigned    pStepMs   = 0;
-    unsigned long long pStepStart = 0;
-    bool        pZoomOut  = false;
-    bool        pendingStopHere = false;   // stop advancing after the fade
-    bool        hasFade   = false;
-    ScaledImage cur;                     // pre-scaled current picture
-    ScaledImage fadeOld;                 // pre-scaled outgoing picture (crossfade)
-    HWND        settings = nullptr;      // settings dialog, if open
+# ---- portable zip with a ready-to-edit settings file ----
+$stage = Join-Path $out 'stage'
+if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $stage | Out-Null
+Copy-Item $exe $stage
+if ($shippedRuntime) {
+    $mingwBin = $null
+    $cfg = (& $gpp -v 2>&1 | Out-String) -split "`n" | Where-Object { $_ -match '^Target: *(\S+)' } | Select-Object -First 1
+    if ($cfg) {
+        $triplet = ([regex]'Target: *(\S+)').Match($cfg).Groups[1].Value
+        $cand = Join-Path (Split-Path (Split-Path $gpp -Parent) -Parent) ("lib/gcc/" + $triplet)
+        if (Test-Path $cand) { $mingwBin = (Resolve-Path (Join-Path $cand '../..')).Path }
+    }
+    if (-not $mingwBin) { $mingwBin = Split-Path $gpp -Parent }
+    foreach ($dll in @('libgcc_s_seh-1.dll','libstdc++-6.dll','libwinpthread-1.dll')) {
+        $p = Get-ChildItem -Path $mingwBin -Filter $dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $p) { $p = Get-Command $dll -ErrorAction SilentlyContinue }
+        if ($p) { Copy-Item $p.FullName $stage }
+    }
+}
+if (Test-Path 'slideshow.default.ini') { Copy-Item 'slideshow.default.ini' (Join-Path $stage 'slideshow.ini') }
+foreach ($doc in @('README.md','LICENSE')) { if (Test-Path $doc) { Copy-Item $doc $stage } }
 
-    // edit (drag / resize) state
-    bool        dragging   = false;
-    bool        resizing   = false;
-    POINT       dragStart{};
-    RECT        rectStart{};
+$zip = Join-Path $out "$JobName-$verStr-win-x64-portable.zip"
+if (Test-Path $zip) { Remove-Item $zip -Force }
+Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+(Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() + '  ' + (Split-Path $zip -Leaf) |
+    Set-Content -Encoding ascii (Join-Path $out "$JobName-$verStr-SHA256.txt")
 
-    bool        quit       = false;
-    bool        edit       = false;      // edit mode active (interactive, visible border)
-    bool        trayReady  = false;
-    bool        sessionNotify = false;
-    bool        hovering  = false;
-    bool        locked    = false;   // session is locked
-    bool        userPlaying = true;  // what the user last asked for
-    std::wstring cfgPath;                // where the .ini lives
-    std::wstring exeDir;
-    bool        cfgWritable = true;
-    int         dpi         = 96;
-};
-
-// --- config (config.cpp) ---
-bool LoadConfig(Ctx& c);
-bool SaveConfig(Ctx& c);
-
-// --- render helpers (render.cpp) ---
-bool GdiplusInit();
-void GdiplusShutdown2();
-HFONT UiFont2();      // the shell UI font, shared by the dialog + the edit bar
-
-// --- images (images.cpp) ---
-void RebuildPlaylist(Ctx& c);
-std::wstring BuildCaption(Ctx& c, const std::wstring& file);
-bool GetScaled(Ctx& c, size_t listIndex, ScaledImage& out);
-void FreeScaled(ScaledImage& s);
-
-// --- layout (render.cpp) ---
-struct Layout {
-    RECT win{};        // whole window rect (screen px, includes the shadow band)
-    RECT content{};    // picture area
-    RECT clip{};       // rounded picture area (clipping)
-    RECT scrim{};      // caption strip
-    RECT grip{};       // interactive handle
-    RECT bar{};        // edit-mode info bar
-    int  radius = 0;
-    int  shadow = 0;
-    bool haveContent = false;
-};
-Layout LayoutOf(Ctx& c, const RECT& win);
-Layout CurrentLayout(Ctx& c);
-
-inline double Clampd(double v, double lo, double hi) { return v < lo ? lo : (v > hi ? hi : v); }
-inline int  Clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
-inline int  ScaleForDpi(int px, int dpi) { return MulDiv(px, dpi ? dpi : 96, 96); }
-
-// --- render (render.cpp) ---
-void RenderFrame(Ctx& c);          // draws the current state and pushes it on screen
-void Invalidate(Ctx& c);           // re-evaluate the timers + force one render
-
-// --- app / window (app.cpp) ---
-bool RegisterClasses(Ctx& c);
-bool CreateWidget(Ctx& c);
-bool CreateHiddenWindow(Ctx& c);
-void FinishStartup(Ctx& c);
-void Cleanup(Ctx& c);
-void ShowTrayBalloon(Ctx& c, const wchar_t* title, const wchar_t* text);
-void ShowMenuAt(Ctx& c, POINT pt);
-void ShowSettingsDialog(Ctx& c);
-void BroadcastToInstances(unsigned msg);
-bool FullscreenRunning();
-bool SetAutostart(Ctx& c, bool on, bool silent);   // HKCU Run key
-void SetEdit(Ctx& c, bool on);
-
-// --- cli.cpp ---
-bool HandleCommandLine(Ctx& c, int argc, wchar_t** argv, int& exitCode);
-
-} // namespace dskv
+Write-Host ''
+Write-Host ('built {0} ({1:N0} bytes)' -f (Split-Path $exe -Leaf), (Get-Item $exe).Length)
+Write-Host ('built {0}' -f $zip)
