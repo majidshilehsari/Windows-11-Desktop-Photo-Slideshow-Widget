@@ -1,0 +1,6 @@
+dist/
+*.obj
+*.res
+*.exe
+*.log
+slideshow.ini
