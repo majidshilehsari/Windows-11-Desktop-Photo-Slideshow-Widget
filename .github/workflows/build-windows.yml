@@ -1,0 +1,94 @@
+name: Build Windows exe
+
+# Two ways to get an .exe out of this repo:
+#   1) push a tag like v1.0.0 (or create a release) -> a build is attached to it
+#   2) Actions -> "Build Windows exe" -> Run workflow  -> artefacts under "Summary"
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version baked into the exe (e.g. 0.1.0)
+        default: auto
+        type: string
+      upx:
+        description: Pack the exe with UPX (smaller, may upset SmartScreen/AV)
+        type: boolean
+        default: false
+  workflow_call:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: MSYS2 / MinGW-w64
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-winpthreads-static
+            zip
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = '${{ inputs.version }}'
+          if ([string]::IsNullOrWhiteSpace($v) -or $v -eq 'auto') {
+            if ('${{ github.ref_name }}' -like 'v*') { $v = ('${{ github.ref_name }}').Substring(1) } else { $v = '0.1.0' }
+          }
+          if ($v -notmatch '^\d+(\.\d+){0,3}$') { $v = '0.1.0' }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "built<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          (Get-Date -Format 'yyyy-MM-dd HH:mm z') | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Compile
+        shell: msys2 {0}
+        run: |
+          set -o pipefail
+          export PATH=/mingw64/bin:$PATH
+          gcc --version | head -1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build/build.ps1 \
+            -Version "${{ steps.ver.outputs.version }}" \
+            -OutDir dist \
+            -JobName desktop-slideshow
+          ls -l dist
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-slideshow-${{ steps.ver.outputs.version }}-win-x64
+          path: |
+            dist/desktop-slideshow.exe
+            dist/*.zip
+            dist/*SHA256.txt
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            Portable Windows 11 desktop photo-slideshow widget.
+
+            * `desktop-slideshow-<version>-win-x64-portable.zip` - **this is the one to use**: extract anywhere (a folder on your PC, not a temp archive view), run `desktop-slideshow.exe`, edit `slideshow.ini` next to it.
+            * `desktop-slideshow.exe` - the bare executable.
+            * No installer, no .NET / VC++ runtime, no admin rights needed.
+
+            First run: right-click the tray icon -> **Choose folder**, drag the picture into place, then tick **Start with Windows**.
+          files: |
+            dist/desktop-slideshow-${{ steps.ver.outputs.version }}-win-x64-portable.zip
+            dist/desktop-slideshow.exe
+            dist/*SHA256.txt
