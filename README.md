@@ -29,9 +29,15 @@ The `.exe` is built by GitHub Actions (this sandbox is Linux, so the binary is p
 > creates files under `.github/workflows`, so the CI definition ships as
 > [`build/build-windows.yml`](build/build-windows.yml) and *you* have to commit it once:
 >
-> * **web (30 s):** repo → *Add file* → *Create new file* → name it
->   `.github/workflows/build-windows.yml` → paste the contents of `build/build-windows.yml` → commit to `main`; **or**
-> * **CLI:** `powershell -ExecutionPolicy Bypass -File build\enable-actions.ps1` (needs `gh auth login` as *you*).
+> * **web, ~40 seconds (recommended):** [new-file form](https://github.com/majidshilehsari/Windows-11-Desktop-Photo-Slideshow-Widget/new/main?filename=.github%2Fworkflows%2Fbuild-windows.yml)
+>   → paste the contents of
+>   [`build/build-windows.yml`](https://github.com/majidshilehsari/Windows-11-Desktop-Photo-Slideshow-Widget/blob/main/build/build-windows.yml)
+>   → **Commit**; **or**
+> * **CLI:** `powershell -ExecutionPolicy Bypass -File build\enable-actions.ps1` (uses your own
+>   `gh` login; needs GitHub CLI installed).
+>
+> After that, **Actions → "Build Windows exe" → Run workflow** gives you an artefact in ~3 minutes, no
+> tag needed.
 
 ### Build it yourself / rebuild
 
